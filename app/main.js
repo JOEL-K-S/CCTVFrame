@@ -572,6 +572,20 @@
       return;
     }
 
+    var headBtns = [$('btnHeaderAddCam'), $('btnHeaderSettings')];
+    var headIdx = headBtns.indexOf(document.activeElement);
+    if (!state.isFullscreen && headIdx >= 0) {
+      if (ev) ev.preventDefault();
+      if (code === KEYS.LEFT) headBtns[Math.max(0, headIdx - 1)].focus();
+      else if (code === KEYS.RIGHT) headBtns[Math.min(headBtns.length - 1, headIdx + 1)].focus();
+      else if (code === KEYS.DOWN || code === KEYS.BACK || code === KEYS.ESC) {
+        headBtns[headIdx].blur();
+        var stage = $('stage');
+        if (stage) stage.focus();
+      } else if (code === KEYS.ENTER) headBtns[headIdx].click();
+      return;
+    }
+
     // Keyboard shortcuts for PC preview: A / S / B / +
     if (!state.isFullscreen && (code === 65 || code === 83 || code === 66 || code === 187 || code === 107)) {
       openModal();
@@ -601,6 +615,7 @@
       if (state.focusedIndex % cols < cols - 1 && state.focusedIndex + 1 < slots) setFocus(state.focusedIndex + 1);
     } else if (code === KEYS.UP) {
       if (state.focusedIndex >= cols) setFocus(state.focusedIndex - cols);
+      else if (headBtns[0]) headBtns[0].focus();
     } else if (code === KEYS.DOWN) {
       if (state.focusedIndex + cols < slots) setFocus(state.focusedIndex + cols);
     } else if (code === KEYS.ENTER) {
