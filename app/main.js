@@ -24,14 +24,15 @@
     },
     hikvision: function (c) {
       var ch = parseInt(c.channel || 1, 10);
-      var streamId = (ch * 100) + 2; // e.g. Channel 1 sub-stream = 102
+      var streamId = (ch * 100) + (c.subtype === 'main' ? 1 : 2); // e.g. Channel 1: 101 main, 102 sub
       return 'rtsp://' + (c.user ? encodeURIComponent(c.user) + ':' + encodeURIComponent(c.pass) + '@' : '') + c.ip + ':' + (c.port || 554) + '/Streaming/Channels/' + streamId;
     },
     dahua: function (c) {
-      return 'rtsp://' + (c.user ? encodeURIComponent(c.user) + ':' + encodeURIComponent(c.pass) + '@' : '') + c.ip + ':' + (c.port || 554) + '/cam/realmonitor?channel=' + (c.channel || 1) + '&subtype=1';
+      var subtype = (c.subtype === 'main') ? 0 : 1;
+      return 'rtsp://' + (c.user ? encodeURIComponent(c.user) + ':' + encodeURIComponent(c.pass) + '@' : '') + c.ip + ':' + (c.port || 554) + '/cam/realmonitor?channel=' + (c.channel || 1) + '&subtype=' + subtype;
     },
     reolink: function (c) {
-      return 'rtsp://' + (c.user ? encodeURIComponent(c.user) + ':' + encodeURIComponent(c.pass) + '@' : '') + c.ip + ':' + (c.port || 554) + '/h264Preview_01_sub';
+      return 'rtsp://' + (c.user ? encodeURIComponent(c.user) + ':' + encodeURIComponent(c.pass) + '@' : '') + c.ip + ':' + (c.port || 554) + (c.subtype === 'main' ? '/h264Preview_01_main' : '/h264Preview_01_sub');
     },
     custom: function (c) {
       return c.customUrl || '';
@@ -53,6 +54,9 @@
     hudTimer: null,
     snapshotTimer: null,
     toastTimer: null,
+    clockTimer: null,
+    discoveryTimer: null,
+    snapFails: 0,
     isModalOpen: false,
     hasAvplay: typeof window.webapis !== 'undefined' && typeof window.webapis.avplay !== 'undefined'
   };
@@ -68,6 +72,45 @@
   };
 
   function $(id) { return document.getElementById(id); }
+
+  function esc(v) {
+    return String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  /* Hide the user:password part of an RTSP URL before showing it on screen. */
+  function maskUrl(url) {
+    return String(url || '').replace(/(:\/\/)[^\/@\s]*@/, '$1***:***@');
+  }
+
+  /* The backend API lives on the page origin in a browser; inside a TV widget it is the gateway host on port 4800. */
+  function backendBase() {
+    if (/^https?:$/.test(window.location.protocol)) return '';
+    var m = /^(https?:\/\/[^\/:]+)/.exec(state.gatewayUrl || '');
+    return m ? m[1] + ':4800' : null;
+  }
+
+  /* JSON request to the backend. cb(err, data) is always called exactly once. */
+  function api(method, path, body, cb) {
+    var base = backendBase();
+    if (base === null) { cb(new Error('Set the gateway address in Settings first.')); return; }
+    var done = false;
+    function finish(err, data) { if (!done) { done = true; cb(err, data); } }
+    var xhr = new XMLHttpRequest();
+    xhr.open(method, base + path, true);
+    xhr.timeout = 15000;
+    if (body !== null && body !== undefined) xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (e) { }
+      if (xhr.status >= 200 && xhr.status < 300) finish(null, data || {});
+      else finish(new Error((data && data.message) || ('Backend error ' + xhr.status)), data);
+    };
+    xhr.onerror = function () { finish(new Error('Cannot reach the CCTVFrame backend.')); };
+    xhr.ontimeout = function () { finish(new Error('Backend request timed out.')); };
+    try { xhr.send(body !== null && body !== undefined ? JSON.stringify(body) : null); } catch (e) { finish(e); }
+  }
 
   /* ---------- Toast Notification Banner ---------- */
 
@@ -95,6 +138,7 @@
   }
 
   function getAutoGatewayUrl() {
+    if (!/^https?:$/.test(window.location.protocol)) return '';
     var host = window.location.hostname;
     if (!host || host === 'localhost' || host === '127.0.0.1') {
       return 'http://127.0.0.1:1984';
@@ -135,8 +179,9 @@
   }
 
   function syncToBackend() {
-    if (!state.cameras || state.cameras.length === 0) return;
-    var payload = state.cameras.map(function (c) {
+    // Demo cameras are placeholders and must never be registered with the gateway
+    var real = (state.cameras || []).filter(function (c) { return !c.isDemo; });
+    var payload = real.map(function (c) {
       return {
         id: c.id,
         name: c.name,
@@ -148,13 +193,7 @@
         url: getStreamUrl(c, 'sub')
       };
     });
-
-    try {
-      var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/sync_streams', true);
-      xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.send(JSON.stringify(payload));
-    } catch (e) { }
+    api('POST', '/api/sync_streams', payload, function () { });
   }
 
   /* ---------- Stream and Snapshot URLs ---------- */
@@ -168,9 +207,9 @@
     return '';
   }
 
-  function getStreamUrl(cam, forceSub) {
+  function getStreamUrl(cam, quality) {
     if (!cam) return '';
-    // 1. Direct RTSP URL computation
+    // 1. Direct RTSP URL computation (quality: 'sub' | 'main'; default is the camera's own setting, else sub)
     if (cam.brand && BRAND_PRESETS[cam.brand]) {
       var clone = {
         ip: cam.ip,
@@ -178,7 +217,8 @@
         user: cam.user || '',
         pass: cam.pass || '',
         channel: cam.channel || 1,
-        subtype: forceSub ? 'sub' : (cam.subtype || 'sub')
+        customUrl: cam.customUrl || cam.url || '',
+        subtype: quality === 'main' ? 'main' : (quality === 'sub' ? 'sub' : (cam.subtype || 'sub'))
       };
       return BRAND_PRESETS[cam.brand](clone);
     }
@@ -227,14 +267,14 @@
 
     // Adapt layout if exactly 2 cameras
     var effectiveGrid = state.gridMode;
-    if (state.cameras.length === 2 && state.gridMode === 2) {
-      effectiveGrid = 2;
-    }
 
     wall.className = 'grid-wall grid-' + effectiveGrid;
     wall.innerHTML = '';
 
     var count = Math.min(effectiveGrid, state.cameras.length);
+    // Focusable slots = cameras plus the "add camera" tile when there is room
+    var slots = count + (count < effectiveGrid ? 1 : 0);
+    if (state.focusedIndex >= slots) state.focusedIndex = Math.max(0, slots - 1);
 
     if (count === 0) {
       wall.innerHTML = [
@@ -259,11 +299,11 @@
 
       tile.innerHTML = [
         '<div class="tile-media">',
-        '<img class="tile-snapshot" id="snap-' + i + '" alt="' + cam.name + '">',
-        '<div class="tile-placeholder" id="ph-' + i + '"><span class="ph-icon">📹</span><span>' + (cam.brand ? cam.brand.toUpperCase() : 'RTSP') + ' Stream Ready</span></div>',
+        '<img class="tile-snapshot" id="snap-' + i + '" style="opacity:0" alt="">',
+        '<div class="tile-placeholder" id="ph-' + i + '"><span class="ph-icon">📹</span><span>' + esc(cam.brand ? cam.brand.toUpperCase() : 'RTSP') + ' Stream Ready</span></div>',
         '<div class="tile-overlay">',
-        '<span class="tile-name">' + cam.name + '</span>',
-        '<span class="status-chip status-snap" id="chip-' + i + '">LIVE</span>',
+        '<span class="tile-name">' + esc(cam.name) + '</span>',
+        '<span class="status-chip status-connecting" id="chip-' + i + '">CONNECTING</span>',
         '</div>',
         '</div>'
       ].join('');
@@ -282,7 +322,7 @@
     if (count < effectiveGrid) {
       var addTile = document.createElement('article');
       addTile.className = 'cam-tile cam-tile-add' + (count === state.focusedIndex ? ' is-focused' : '');
-      addTile.id = 'tile-add';
+      addTile.id = 'tile-' + count;
       addTile.title = 'Click to Add Camera';
       addTile.innerHTML = [
         '<div class="tile-add-content">',
@@ -302,28 +342,50 @@
 
   function refreshSnapshots() {
     clearTimeout(state.snapshotTimer);
+    state.snapshotTimer = null;
     if (state.isFullscreen || state.isModalOpen) return;
+    if (document.hidden) return; // resumed by the visibilitychange handler
 
     var count = Math.min(state.gridMode, state.cameras.length);
+    var anyOk = false, pending = 0;
     for (var i = 0; i < count; i++) {
-      var cam = state.cameras[i];
-      var img = $('snap-' + i);
-      if (img && cam) {
+      (function (index) {
+        var cam = state.cameras[index];
+        var img = $('snap-' + index);
+        if (!img || !cam || img.getAttribute('data-busy') === '1') return;
         var url = getSnapshotUrl(cam);
-        if (url) {
-          img.src = url;
-          var chip = $('chip-' + i);
-          if (chip) chip.className = 'status-chip status-snap';
-        }
-      }
+        if (!url) return;
+        pending++;
+        img.setAttribute('data-busy', '1');
+        img.onload = function () {
+          img.setAttribute('data-busy', '0');
+          img.style.opacity = '1';
+          var chip = $('chip-' + index);
+          if (chip) { chip.className = 'status-chip status-live'; chip.textContent = 'LIVE'; }
+          state.snapFails = 0;
+        };
+        img.onerror = function () {
+          img.setAttribute('data-busy', '0');
+          var chip = $('chip-' + index);
+          if (chip) { chip.className = 'status-chip status-offline'; chip.textContent = 'OFFLINE'; }
+          state.snapFails = (state.snapFails || 0) + 1;
+        };
+        img.src = url;
+      })(i);
     }
 
-    state.snapshotTimer = setTimeout(refreshSnapshots, 2500);
+    // Back off while cameras are unreachable to avoid hammering the network
+    var delay = (state.snapFails || 0) >= 3 ? 10000 : 3000;
+    state.snapshotTimer = setTimeout(refreshSnapshots, delay);
+  }
+
+  function focusSlots() {
+    var count = Math.min(state.gridMode, state.cameras.length);
+    return count + (count < state.gridMode ? 1 : 0);
   }
 
   function setFocus(newIndex) {
-    var count = Math.min(state.gridMode, state.cameras.length);
-    if (newIndex < 0 || newIndex >= count) return;
+    if (newIndex < 0 || newIndex >= focusSlots()) return;
 
     var prev = $('tile-' + state.focusedIndex);
     if (prev) prev.classList.remove('is-focused');
@@ -342,6 +404,8 @@
 
     state.isFullscreen = true;
     state.focusedIndex = camIndex;
+    clearTimeout(state.snapshotTimer);
+    updateClock();
 
     var fsView = $('fullscreenView');
     if (fsView) {
@@ -353,9 +417,11 @@
     $('fsHudName').textContent = cam.name;
     showHud();
 
-    var directRtsp = getStreamUrl(cam, false);
+    var directRtsp = getStreamUrl(cam, 'main');
     var gatewayUrl = getGatewayPlayUrl(cam);
     var video = $('fsVideoPlayer');
+    $('fsHudStatus').textContent = 'LIVE';
+    $('fsHudStatus').className = 'hud-status';
 
     if (directRtsp.indexOf('rtsp://') === 0 && state.hasAvplay) {
       video.style.display = 'none';
@@ -364,8 +430,17 @@
     } else {
       if (state.hasAvplay) stopAvplay();
       video.style.display = 'block';
+      video.onerror = function () {
+        $('fsHudStatus').textContent = 'STREAM ERR';
+        $('fsHudStatus').className = 'hud-status status-offline';
+      };
+      if (!gatewayUrl) {
+        video.onerror();
+        return;
+      }
       video.src = gatewayUrl;
-      video.play().catch(function () {});
+      var p = video.play();
+      if (p && p.catch) p.catch(function () {});
       $('fsHudCodec').textContent = 'go2rtc Low-Latency Stream';
     }
   }
@@ -381,13 +456,16 @@
 
     var video = $('fsVideoPlayer');
     if (video) {
+      video.onerror = null;
       video.pause();
-      video.src = '';
+      video.removeAttribute('src');
+      video.load(); // drops the HTTP stream connection
     }
 
     if (state.hasAvplay) stopAvplay();
 
     showHud(false);
+    updateClock();
     refreshSnapshots();
   }
 
@@ -439,9 +517,37 @@
 
   /* ---------- Remote Control Key Handler ---------- */
 
-  function handleKey(code) {
+  function modalFocusables() {
+    var modal = $('settingsModal');
+    var nodes = modal ? modal.querySelectorAll('button, input, select') : [];
+    return Array.prototype.filter.call(nodes, function (el) {
+      return !el.disabled && !el.readOnly && el.offsetParent !== null;
+    });
+  }
+
+  function moveModalFocus(step) {
+    var items = modalFocusables();
+    if (!items.length) return;
+    var idx = items.indexOf(document.activeElement);
+    var next = idx < 0 ? 0 : Math.max(0, Math.min(items.length - 1, idx + step));
+    items[next].focus();
+    if (items[next].scrollIntoView) items[next].scrollIntoView(false);
+  }
+
+  function handleKey(code, ev) {
     if (state.isModalOpen) {
+      var active = document.activeElement;
+      var isText = active && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
       if (code === KEYS.BACK || code === KEYS.ESC) closeModal();
+      else if (code === KEYS.DOWN) { if (ev) ev.preventDefault(); moveModalFocus(1); }
+      else if (code === KEYS.UP) { if (ev) ev.preventDefault(); moveModalFocus(-1); }
+      else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && !isText) {
+        if (ev) ev.preventDefault();
+        moveModalFocus(code === KEYS.RIGHT ? 1 : -1);
+      } else if (code === KEYS.ENTER && active && active.tagName === 'INPUT') {
+        if (ev) ev.preventDefault();
+        moveModalFocus(1);
+      }
       return;
     }
 
@@ -452,14 +558,13 @@
     }
 
     if (state.isFullscreen) {
+      var total = state.cameras.length;
       if (code === KEYS.BACK || code === KEYS.ESC) {
         closeFullscreen();
-      } else if (code === KEYS.LEFT) {
-        var prevIdx = (state.focusedIndex - 1 + state.cameras.length) % state.cameras.length;
-        openFullscreen(prevIdx);
-      } else if (code === KEYS.RIGHT) {
-        var nextIdx = (state.focusedIndex + 1) % state.cameras.length;
-        openFullscreen(nextIdx);
+      } else if (code === KEYS.LEFT && total > 0) {
+        openFullscreen((state.focusedIndex - 1 + total) % total);
+      } else if (code === KEYS.RIGHT && total > 0) {
+        openFullscreen((state.focusedIndex + 1) % total);
       } else if (code === KEYS.ENTER) {
         showHud();
       }
@@ -467,18 +572,19 @@
     }
 
     var cols = state.gridMode === 6 ? 3 : (state.gridMode === 4 || state.gridMode === 2 ? 2 : 1);
-    var count = Math.min(state.gridMode, state.cameras.length);
+    var slots = focusSlots();
 
     if (code === KEYS.LEFT) {
       if (state.focusedIndex % cols > 0) setFocus(state.focusedIndex - 1);
     } else if (code === KEYS.RIGHT) {
-      if (state.focusedIndex % cols < cols - 1 && state.focusedIndex + 1 < count) setFocus(state.focusedIndex + 1);
+      if (state.focusedIndex % cols < cols - 1 && state.focusedIndex + 1 < slots) setFocus(state.focusedIndex + 1);
     } else if (code === KEYS.UP) {
       if (state.focusedIndex >= cols) setFocus(state.focusedIndex - cols);
     } else if (code === KEYS.DOWN) {
-      if (state.focusedIndex + cols < count) setFocus(state.focusedIndex + cols);
+      if (state.focusedIndex + cols < slots) setFocus(state.focusedIndex + cols);
     } else if (code === KEYS.ENTER) {
-      openFullscreen(state.focusedIndex);
+      if (state.focusedIndex < state.cameras.length && state.focusedIndex < state.gridMode) openFullscreen(state.focusedIndex);
+      else openModal();
     } else if (code === KEYS.RED) {
       // Toggle Grid layout: 1 -> 2 -> 4 -> 6 -> 1
       if (state.gridMode === 1) state.gridMode = 2;
@@ -520,14 +626,14 @@
         pass: $('wzPass').value || '',
         channel: parseInt($('wzChannel').value || 1, 10)
       });
-      $('wzGeneratedUrl').value = gen;
+      $('wzGeneratedUrl').value = maskUrl(gen);
     }
   }
 
   function addCameraFromWizard() {
     var brand = $('wzBrand').value;
     var ip = ($('wzIp').value || '').trim();
-    if (!ip) return false;
+    if (!/^[A-Za-z0-9.\-]+$/.test(ip)) return false; // blocks characters that would alter the RTSP URL
 
     // If currently only demo cameras exist, clear them so the user's real camera is first
     if (isOnlyDemoCameras()) {
@@ -538,17 +644,18 @@
     var brandLabel = $('wzBrand').options[$('wzBrand').selectedIndex].text.split(' ')[0];
     var name = customName || (brandLabel + ' Camera ' + (state.cameras.length + 1));
 
-    // Check if camera with this IP already exists in watchlist
+    // Same IP on the same NVR channel is the same camera
+    var channelNum = parseInt($('wzChannel').value || 1, 10) || 1;
     var existingIdx = -1;
     for (var i = 0; i < state.cameras.length; i++) {
-      if (state.cameras[i].ip === ip) {
+      if (state.cameras[i].ip === ip && (state.cameras[i].channel || 1) === channelNum) {
         existingIdx = i;
         break;
       }
     }
 
     var sId = existingIdx >= 0 ? state.cameras[existingIdx].id : ('cam_' + Date.now());
-    var sName = 'cam_' + brand + '_' + (existingIdx >= 0 ? existingIdx + 1 : (state.cameras.length + 1));
+    var sName = existingIdx >= 0 ? state.cameras[existingIdx].streamName : ('cam_' + brand + '_' + Date.now());
 
     var camData = {
       id: sId,
@@ -558,7 +665,7 @@
       port: parseInt($('wzPort').value || 554, 10),
       channel: parseInt($('wzChannel').value || 1, 10),
       user: ($('wzUser').value || '').trim(),
-      pass: ($('wzPass').value || '').trim(),
+      pass: $('wzPass').value || '',
       streamName: sName,
       isDemo: false
     };
@@ -598,8 +705,8 @@
       var badge = c.isDemo ? ' <span style="background:#57606f; color:#fff; font-size:11px; padding:2px 6px; border-radius:4px;">DEMO</span>' : '';
       item.innerHTML = [
         '<div style="overflow:hidden;">',
-        '<div class="cam-config-name">' + (idx + 1) + '. ' + c.name + badge + '</div>',
-        '<div class="cam-config-url">' + getStreamUrl(c) + '</div>',
+        '<div class="cam-config-name">' + (idx + 1) + '. ' + esc(c.name) + badge + '</div>',
+        '<div class="cam-config-url">' + esc(maskUrl(getStreamUrl(c))) + '</div>',
         '</div>',
         '<button class="btn btn-secondary" style="margin-left:auto; font-size:13px;" data-del="' + idx + '">Remove</button>'
       ].join('');
@@ -627,18 +734,24 @@
       modal.classList.remove('is-hidden');
     }
     $('cfgGatewayUrl').value = state.gatewayUrl;
+    clearTimeout(state.snapshotTimer);
     renderConfiguredList();
     updateWizardUrl();
+    var first = modalFocusables()[0];
+    if (first) first.focus();
   }
 
   function closeModal() {
     state.isModalOpen = false;
+    clearTimeout(state.discoveryTimer);
     var modal = $('settingsModal');
     if (modal) {
       modal.hidden = true;
       modal.style.display = 'none';
       modal.classList.add('is-hidden');
     }
+    var stageEl = $('stage');
+    if (stageEl) stageEl.focus();
     renderGrid();
     checkGateway();
   }
@@ -646,6 +759,9 @@
   /* ---------- Clock & Registration ---------- */
 
   function updateClock() {
+    clearTimeout(state.clockTimer);
+    if (document.hidden) return; // restarted by the visibilitychange handler
+
     var now = new Date();
     var h = String(now.getHours());
     var m = String(now.getMinutes());
@@ -661,7 +777,9 @@
     var fsClock = $('fsHudClock');
     if (fsClock) fsClock.textContent = timeStr + ':' + s;
 
-    setTimeout(updateClock, 1000);
+    // Seconds are only shown in the fullscreen HUD; otherwise wake once a minute
+    var delay = state.isFullscreen ? 1000 : (60000 - (now.getTime() % 60000) + 50);
+    state.clockTimer = setTimeout(updateClock, delay);
   }
 
   function registerKeys() {
@@ -681,12 +799,26 @@
     loadState();
     registerKeys();
     updateClock();
+    var modeBadge = $('modeBadge');
+    if (modeBadge) modeBadge.textContent = state.gridMode + '-Grid Live Wall';
     renderGrid();
     checkGateway();
+    syncToBackend(); // go2rtc forgets streams on restart, so re-register them
 
     // Keydown Listener
     document.addEventListener('keydown', function (e) {
-      handleKey(e.keyCode);
+      handleKey(e.keyCode, e);
+    });
+
+    // Stop timers while the app is in the background
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        clearTimeout(state.snapshotTimer);
+        clearTimeout(state.clockTimer);
+      } else {
+        updateClock();
+        refreshSnapshots();
+      }
     });
 
     // Wizard Input Handlers
@@ -719,106 +851,90 @@
       });
     }
 
-    // Backend Discovery & Handshake Probe Handlers
-    var discoveryPoller = null;
+    /* Backend discovery & handshake probe handlers */
+    function setStatus(cls, text) {
+      var statusEl = $('probeStatus');
+      if (statusEl) statusEl.innerHTML = '<span class="' + cls + '">' + esc(text) + '</span>';
+    }
+
+    function renderDiscovered(devices) {
+      var listEl = $('discoveredList');
+      if (!listEl) return;
+      if (!devices || !devices.length) { listEl.style.display = 'none'; listEl.innerHTML = ''; return; }
+      listEl.style.display = 'flex';
+      listEl.innerHTML = '<div style="font-weight:700; margin-top:8px;">Discovered Devices (Click to autofill):</div>';
+      devices.forEach(function (dev) {
+        var item = document.createElement('div');
+        item.className = 'cam-config-item';
+        item.style.cursor = 'pointer';
+        item.innerHTML = [
+          '<div style="overflow:hidden;">',
+          '<div class="cam-config-name">📷 ' + esc(dev.brand) + ' (' + esc(dev.ip) + ')</div>',
+          '<div class="cam-config-url">RTSP 554: ' + (dev.ports && dev.ports.rtsp ? 'OPEN' : 'CLOSED') + ' | ' + esc(dev.banner) + '</div>',
+          '</div>',
+          '<button class="btn btn-primary" style="margin-left:auto; padding:6px 12px; font-size:13px;">Use Device</button>'
+        ].join('');
+
+        item.onclick = function () {
+          $('wzIp').value = dev.ip;
+          var b = (dev.brand || '').toLowerCase();
+          if (b.indexOf('imou') >= 0) {
+            $('wzBrand').value = 'imou';
+            $('wzUser').value = 'admin';
+            $('wzPass').placeholder = 'Safety Code (on sticker)';
+            $('wzName').value = 'Imou Bullet (' + dev.ip + ')';
+          } else if (b.indexOf('tapo') >= 0 || b.indexOf('tp-link') >= 0) {
+            $('wzBrand').value = 'tapo';
+            $('wzUser').placeholder = 'Tapo Camera Account';
+            $('wzName').value = 'Tapo Camera (' + dev.ip + ')';
+          } else if (b.indexOf('hikvision') >= 0) {
+            $('wzBrand').value = 'hikvision';
+          } else if (b.indexOf('dahua') >= 0) {
+            $('wzBrand').value = 'dahua';
+          } else if (b.indexOf('reolink') >= 0) {
+            $('wzBrand').value = 'reolink';
+          }
+          updateWizardUrl();
+          showToast('Autofilled settings for ' + dev.brand + ' (' + dev.ip + ')');
+        };
+
+        listEl.appendChild(item);
+      });
+    }
 
     function pollDiscovery() {
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/api/discovery', true);
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          try {
-            var data = JSON.parse(xhr.responseText);
-            var statusEl = $('probeStatus');
-            var listEl = $('discoveredList');
-
-            if (data.scanning) {
-              if (statusEl) statusEl.innerHTML = '<span class="status-badge-loading">⏳ ' + (data.progress || 'Scanning local subnet...') + '</span>';
-              discoveryPoller = setTimeout(pollDiscovery, 1200);
-            } else {
-              if (statusEl) statusEl.innerHTML = '<span class="status-badge-success">✔ ' + (data.progress || 'Scan complete.') + '</span>';
-              if (data.discovered && data.discovered.length > 0 && listEl) {
-                listEl.style.display = 'flex';
-                listEl.innerHTML = '<div style="font-weight:700; color:#ffd32a; margin-top:8px;">Discovered Devices (Click to autofill):</div>';
-                data.discovered.forEach(function (dev) {
-                  var item = document.createElement('div');
-                  item.className = 'cam-config-item';
-                  item.style.cursor = 'pointer';
-                  item.innerHTML = [
-                    '<div style="overflow:hidden;">',
-                    '<div class="cam-config-name">📷 ' + dev.brand + ' (' + dev.ip + ')</div>',
-                    '<div class="cam-config-url">RTSP 554: ' + (dev.ports.rtsp ? 'OPEN' : 'CLOSED') + ' | ' + dev.banner + '</div>',
-                    '</div>',
-                    '<button class="btn btn-primary" style="margin-left:auto; padding:6px 12px; font-size:13px;">Use Device</button>'
-                  ].join('');
-
-                  item.onclick = function () {
-                    $('wzIp').value = dev.ip;
-                    var b = (dev.brand || '').toLowerCase();
-                    if (b.indexOf('imou') >= 0) {
-                      $('wzBrand').value = 'imou';
-                      $('wzUser').value = 'admin';
-                      $('wzPass').placeholder = 'Safety Code (on sticker)';
-                      $('wzName').value = 'Imou Bullet (' + dev.ip + ')';
-                    } else if (b.indexOf('tapo') >= 0 || b.indexOf('tp-link') >= 0) {
-                      $('wzBrand').value = 'tapo';
-                      $('wzUser').placeholder = 'Tapo Camera Account';
-                      $('wzName').value = 'Tapo Camera (' + dev.ip + ')';
-                    } else if (b.indexOf('hikvision') >= 0) {
-                      $('wzBrand').value = 'hikvision';
-                    } else if (b.indexOf('dahua') >= 0) {
-                      $('wzBrand').value = 'dahua';
-                    } else if (b.indexOf('reolink') >= 0) {
-                      $('wzBrand').value = 'reolink';
-                    }
-                    updateWizardUrl();
-                    showToast('Autofilled settings for ' + dev.brand + ' (' + dev.ip + ')');
-                  };
-
-                  listEl.appendChild(item);
-                });
-              }
-            }
-          } catch (e) {}
+      clearTimeout(state.discoveryTimer);
+      if (!state.isModalOpen) return;
+      api('GET', '/api/discovery', null, function (err, data) {
+        if (err) { setStatus('status-badge-error', '✖ ' + err.message); return; }
+        if (data.scanning) {
+          setStatus('status-badge-loading', '⏳ ' + (data.progress || 'Scanning local subnet...'));
+          state.discoveryTimer = setTimeout(pollDiscovery, 1500);
+        } else {
+          setStatus('status-badge-success', '✔ ' + (data.progress || 'Scan complete.'));
+          renderDiscovered(data.discovered);
         }
-      };
-      xhr.send();
+      });
     }
 
     $('btnRunDiscovery').onclick = function () {
-      var statusEl = $('probeStatus');
-      if (statusEl) statusEl.innerHTML = '<span class="status-badge-loading">🚀 Initiating subnet camera discovery...</span>';
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/api/scan', true);
-      xhr.onload = function () {
+      setStatus('status-badge-loading', '🚀 Initiating subnet camera discovery...');
+      api('POST', '/api/scan', {}, function (err) {
+        if (err) { setStatus('status-badge-error', '✖ ' + err.message); return; }
         pollDiscovery();
-      };
-      xhr.send();
+      });
     };
 
     $('btnTestProbe').onclick = function () {
-      var ip = $('wzIp').value || '192.168.1.100';
-      var port = $('wzPort').value || 554;
-      var statusEl = $('probeStatus');
-      if (statusEl) statusEl.innerHTML = '<span class="status-badge-loading">⏳ Connecting to ' + ip + ':' + port + ' via RTSP handshake...</span>';
-
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/api/probe?ip=' + encodeURIComponent(ip) + '&port=' + encodeURIComponent(port), true);
-      xhr.onload = function () {
-        if (xhr.status === 200) {
-          try {
-            var res = JSON.parse(xhr.responseText);
-            if (res.rtsp_protocol_ok) {
-              if (statusEl) statusEl.innerHTML = '<span class="status-badge-success">✔ RTSP Connection Established! Server: ' + res.banner + '</span>';
-            } else if (res.port_open) {
-              if (statusEl) statusEl.innerHTML = '<span class="status-badge-warning">⚠ Port ' + port + ' open, but camera RTSP returned: ' + res.banner + '</span>';
-            } else {
-              if (statusEl) statusEl.innerHTML = '<span class="status-badge-error">✖ Unreachable: Port ' + port + ' closed on ' + ip + '</span>';
-            }
-          } catch (e) {}
-        }
-      };
-      xhr.send();
+      var ip = ($('wzIp').value || '').trim() || '192.168.1.100';
+      var port = parseInt($('wzPort').value || 554, 10) || 554;
+      setStatus('status-badge-loading', '⏳ Connecting to ' + ip + ':' + port + ' via RTSP handshake...');
+      api('POST', '/api/probe', { ip: ip, port: port }, function (err, res) {
+        if (err) { setStatus('status-badge-error', '✖ ' + err.message); return; }
+        if (res.rtsp_protocol_ok) setStatus('status-badge-success', '✔ RTSP Connection Established! Server: ' + res.banner);
+        else if (res.port_open) setStatus('status-badge-warning', '⚠ Port ' + port + ' open, but camera RTSP returned: ' + res.banner);
+        else setStatus('status-badge-error', '✖ Unreachable: Port ' + port + ' closed on ' + ip);
+      });
     };
 
     // Verify Authentication & Visual Live Check button
@@ -826,11 +942,11 @@
     if (btnVerify) {
       btnVerify.onclick = function () {
         var ip = ($('wzIp').value || '').trim();
-        var port = parseInt($('wzPort').value || 554, 10);
+        var port = parseInt($('wzPort').value || 554, 10) || 554;
         var brand = $('wzBrand').value;
         var user = ($('wzUser').value || '').trim();
-        var pass = ($('wzPass').value || '').trim();
-        var ch = parseInt($('wzChannel').value || 1, 10);
+        var pass = $('wzPass').value || '';
+        var ch = parseInt($('wzChannel').value || 1, 10) || 1;
 
         if (!ip) {
           showToast('⚠ Please enter camera IP address first.');
@@ -838,8 +954,7 @@
         }
 
         var path = '/stream2';
-        if (brand === 'tapo') path = '/stream2';
-        else if (brand === 'imou' || brand === 'dahua') path = '/cam/realmonitor?channel=' + ch + '&subtype=1';
+        if (brand === 'imou' || brand === 'dahua') path = '/cam/realmonitor?channel=' + ch + '&subtype=1';
         else if (brand === 'hikvision') path = '/Streaming/Channels/' + ((ch * 100) + 2);
         else if (brand === 'reolink') path = '/h264Preview_01_sub';
 
@@ -875,85 +990,70 @@
 
         showToast('Connecting & authenticating with ' + ip + '...');
 
-        var query = [
-          'ip=' + encodeURIComponent(ip),
-          'port=' + encodeURIComponent(port),
-          'brand=' + encodeURIComponent(brand),
-          'user=' + encodeURIComponent(user),
-          'pass=' + encodeURIComponent(pass),
-          'path=' + encodeURIComponent(path)
-        ].join('&');
-
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', '/api/verify_camera?' + query, true);
-        xhr.onload = function () {
-          if (xhr.status === 200) {
-            try {
-              var res = JSON.parse(xhr.responseText);
-              if (res.authenticated) {
-                if (card) card.className = 'verification-card is-success';
-                if (badge) {
-                  badge.className = 'vc-badge is-success';
-                  badge.textContent = '✔ AUTHENTICATED';
-                }
-                if (title) title.textContent = 'Credentials & Live Stream Verified (200 OK)';
-                if (lineAuth) lineAuth.innerHTML = '<span style="color:#2ed573; font-weight:700;">✔ Verified (Credentials Accepted)</span>';
-                if (lineCodec) lineCodec.textContent = res.video_codec || 'H.264 (AVC)';
-                if (lineAudio) lineAudio.textContent = res.audio_codec || 'None';
-                if (lineDetails) lineDetails.textContent = res.message || 'Stream Ready';
-
-                if (res.visual_snapshot_url) {
-                  if (snapImg) {
-                    snapImg.src = res.visual_snapshot_url;
-                    snapImg.onload = function () {
-                      snapImg.style.display = 'block';
-                      if (snapOverlay) snapOverlay.style.display = 'none';
-                    };
-                    snapImg.onerror = function () {
-                      if (snapText) snapText.textContent = '✔ Stream active. Decoding live snapshot...';
-                    };
-                  }
-                } else {
-                  if (snapText) snapText.textContent = '✔ Auth verified! Stream ready for playback.';
-                }
-                showToast('✔ Camera Authenticated & Live View Verified!');
-              } else {
-                if (card) card.className = 'verification-card is-error';
-                if (badge) {
-                  badge.className = 'vc-badge is-error';
-                  badge.textContent = '✖ AUTH FAILED';
-                }
-                if (title) title.textContent = 'Authentication or Connection Rejected';
-                if (lineAuth) lineAuth.innerHTML = '<span style="color:#ff4757; font-weight:700;">✖ ' + (res.message || 'Authentication Failed') + '</span>';
-                if (lineCodec) lineCodec.textContent = '--';
-                if (lineAudio) lineAudio.textContent = '--';
-                if (lineDetails) lineDetails.textContent = 'Status code: ' + (res.status || 'Error');
-
-                if (snapImg) snapImg.style.display = 'none';
-                if (snapOverlay) snapOverlay.style.display = 'flex';
-                if (snapText) snapText.textContent = '✖ No Video: Authentication Failed';
-
-                if (hint) {
-                  if (brand === 'tapo') {
-                    hint.innerHTML = '💡 <strong>TP-Link Tapo:</strong> Did you create a dedicated <em>Camera Account</em> in the Tapo App (Settings &rarr; Advanced Settings &rarr; Camera Account)? Standard TP-Link cloud account logins are rejected by camera RTSP.';
-                  } else if (brand === 'imou') {
-                    hint.innerHTML = '💡 <strong>Imou Bullet:</strong> Username must be <code>admin</code>. Password must be the exact 8-character <strong>Safety Code</strong> printed on the camera sticker near the QR code.';
-                  } else {
-                    hint.innerHTML = '💡 <strong>Check Credentials:</strong> Verify username, password, and ensure RTSP/ONVIF is enabled in camera settings.';
-                  }
-                  hint.style.display = 'block';
-                }
-                showToast('✖ Authentication Failed. Check credentials / Safety Code.');
-              }
-            } catch (e) {
-              if (lineAuth) lineAuth.textContent = 'Error parsing probe response.';
-            }
+        // Credentials go in the POST body, never in the URL
+        api('POST', '/api/verify_camera', { ip: ip, port: port, brand: brand, user: user, pass: pass, path: path }, function (err, res) {
+          if (err && !res) {
+            if (card) card.className = 'verification-card is-error';
+            if (badge) { badge.className = 'vc-badge is-error'; badge.textContent = '✖ ERROR'; }
+            if (lineAuth) lineAuth.textContent = err.message;
+            if (snapText) snapText.textContent = '✖ Verification could not run';
+            return;
           }
-        };
-        xhr.onerror = function () {
-          if (lineAuth) lineAuth.textContent = 'Network error connecting to backend.';
-        };
-        xhr.send();
+          res = res || {};
+          if (res.authenticated) {
+            if (card) card.className = 'verification-card is-success';
+            if (badge) {
+              badge.className = 'vc-badge is-success';
+              badge.textContent = '✔ AUTHENTICATED';
+            }
+            if (title) title.textContent = 'Credentials & Live Stream Verified (200 OK)';
+            if (lineAuth) lineAuth.innerHTML = '<span style="color:#30d158; font-weight:700;">✔ Verified (Credentials Accepted)</span>';
+            if (lineCodec) lineCodec.textContent = res.video_codec || 'H.264 (AVC)';
+            if (lineAudio) lineAudio.textContent = res.audio_codec || 'None';
+            if (lineDetails) lineDetails.textContent = res.message || 'Stream Ready';
+
+            if (res.visual_snapshot_url && snapImg) {
+              snapImg.onload = function () {
+                snapImg.style.display = 'block';
+                if (snapOverlay) snapOverlay.style.display = 'none';
+              };
+              snapImg.onerror = function () {
+                if (snapText) snapText.textContent = '✔ Stream active. Snapshot not available yet.';
+              };
+              snapImg.src = (backendBase() || '') + res.visual_snapshot_url;
+            } else if (snapText) {
+              snapText.textContent = '✔ Auth verified! Stream ready for playback.';
+            }
+            showToast('✔ Camera Authenticated & Live View Verified!');
+          } else {
+            if (card) card.className = 'verification-card is-error';
+            if (badge) {
+              badge.className = 'vc-badge is-error';
+              badge.textContent = '✖ AUTH FAILED';
+            }
+            if (title) title.textContent = 'Authentication or Connection Rejected';
+            if (lineAuth) lineAuth.innerHTML = '<span style="color:#ff453a; font-weight:700;">✖ ' + esc(res.message || 'Authentication Failed') + '</span>';
+            if (lineCodec) lineCodec.textContent = '--';
+            if (lineAudio) lineAudio.textContent = '--';
+            if (lineDetails) lineDetails.textContent = 'Status code: ' + (res.status || 'Error');
+
+            if (snapImg) snapImg.style.display = 'none';
+            if (snapOverlay) snapOverlay.style.display = 'flex';
+            if (snapText) snapText.textContent = '✖ No Video: Authentication Failed';
+
+            if (hint) {
+              if (brand === 'tapo') {
+                hint.innerHTML = '💡 <strong>TP-Link Tapo:</strong> Did you create a dedicated <em>Camera Account</em> in the Tapo App (Settings &rarr; Advanced Settings &rarr; Camera Account)? Standard TP-Link cloud account logins are rejected by camera RTSP.';
+              } else if (brand === 'imou') {
+                hint.innerHTML = '💡 <strong>Imou Bullet:</strong> Username must be <code>admin</code>. Password must be the exact 8-character <strong>Safety Code</strong> printed on the camera sticker near the QR code.';
+              } else {
+                hint.innerHTML = '💡 <strong>Check Credentials:</strong> Verify username, password, and ensure RTSP/ONVIF is enabled in camera settings.';
+              }
+              hint.style.display = 'block';
+            }
+            showToast('✖ Authentication Failed. Check credentials / Safety Code.');
+          }
+        });
       };
     }
 
@@ -984,7 +1084,7 @@
 
     // Test Gateway button
     $('btnTestGateway').onclick = function () {
-      state.gatewayUrl = $('cfgGatewayUrl').value;
+      state.gatewayUrl = ($('cfgGatewayUrl').value || '').trim();
       saveState();
       checkGateway();
       showToast('Testing gateway connection...');
