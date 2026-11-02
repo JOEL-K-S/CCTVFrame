@@ -842,3 +842,230 @@ body {
   border-radius: 8px;
   border-left: 3px solid #ff4757;
 }
+
+/* ===== Apple-inspired theme (tvOS / visionOS): translucent materials, system colours, soft depth, white focus lift ===== */
+:root {
+  --bg: #000;
+  --material: rgba(44, 44, 46, 0.62);
+  --material-thick: rgba(28, 28, 30, 0.82);
+  --hairline: rgba(255, 255, 255, 0.1);
+  --label: #f5f5f7;
+  --label-2: rgba(235, 235, 245, 0.6);
+  --label-3: rgba(235, 235, 245, 0.35);
+  --blue: #0a84ff;
+  --green: #30d158;
+  --red: #ff453a;
+  --yellow: #ffd60a;
+  --radius: 28px;
+  --ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+body {
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--label);
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage {
+  background: radial-gradient(120% 90% at 50% 0%, #1c1c1e 0%, #000 70%);
+  box-shadow: none;
+}
+
+/* Floating translucent header */
+.header {
+  height: 96px;
+  margin: 24px 48px 0;
+  padding: 0 32px;
+  width: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 48px;
+  background: var(--material);
+  backdrop-filter: blur(30px) saturate(180%);
+}
+
+.live-pulse { background: var(--red); box-shadow: 0 0 12px rgba(255, 69, 58, 0.7); }
+.app-title { font-size: 30px; font-weight: 600; letter-spacing: -0.4px; color: var(--label); }
+
+.mode-badge,
+.gateway-badge {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: none;
+  font-size: 15px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--label-2);
+}
+.mode-badge { color: var(--blue); background: rgba(10, 132, 255, 0.16); }
+.gateway-badge.is-connected { background: rgba(48, 209, 88, 0.16); color: var(--green); border: none; }
+.clock { font-size: 28px; font-weight: 600; color: var(--label); }
+
+/* Colour keys become quiet capsules with a coloured dot */
+.key-pill {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--label-2);
+}
+.key-pill::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill-red::before { background: var(--red); }
+.pill-green::before { background: var(--green); }
+.pill-yellow::before { background: var(--yellow); }
+.pill-blue::before { background: var(--blue); }
+.pill-red, .pill-green, .pill-yellow, .pill-blue { background: rgba(255, 255, 255, 0.1); border: none; color: var(--label-2); }
+
+.viewport-area { padding: 32px 48px 40px; }
+.grid-wall { gap: 28px; }
+
+/* Camera tiles: continuous rounded cards, white focus lift */
+.cam-tile {
+  border: none;
+  border-radius: var(--radius);
+  background: var(--material-thick);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  transition: transform 0.35s var(--ease), box-shadow 0.35s var(--ease);
+}
+.cam-tile.is-focused {
+  border: none;
+  transform: scale(1.04);
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.95), 0 30px 60px rgba(0, 0, 0, 0.6);
+}
+
+.cam-tile-add {
+  border: 2px dashed rgba(255, 255, 255, 0.2) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+.cam-tile-add:hover,
+.cam-tile-add.is-focused {
+  border-color: rgba(255, 255, 255, 0.95) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
+}
+.tile-add-icon { color: var(--blue); }
+.tile-add-title { font-weight: 600; color: var(--label); }
+.tile-add-subtitle { color: var(--label-3); }
+.empty-stage-card { border: 2px dashed rgba(255, 255, 255, 0.15); border-radius: 36px; background: rgba(255, 255, 255, 0.04); }
+.tile-media { background: #000; }
+.tile-placeholder { color: var(--label-3); font-weight: 500; }
+
+.tile-name {
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(28, 28, 30, 0.55);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: none;
+  font-weight: 600;
+}
+.status-chip { padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: 0.4px; }
+.status-live { background: var(--green); color: #00210a; }
+.status-snap { background: var(--blue); color: #fff; }
+.status-connecting { background: var(--yellow); color: #261f00; }
+.status-offline { background: var(--red); color: #fff; }
+
+/* Fullscreen HUD */
+.fs-hud {
+  border: 1px solid var(--hairline);
+  border-radius: 40px;
+  background: var(--material);
+  backdrop-filter: blur(30px) saturate(180%);
+}
+.hud-status { border-radius: 999px; background: var(--green); font-weight: 600; }
+.hud-name { font-weight: 600; }
+.hud-codec { color: var(--label-2); }
+.hud-clock { font-weight: 600; }
+.hud-hint { color: var(--label-3); }
+
+/* Sheets */
+.modal-backdrop { background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(40px) saturate(150%); }
+.modal-window {
+  background: var(--material-thick);
+  border: 1px solid var(--hairline);
+  border-radius: 44px;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+}
+.modal-header h2 { font-weight: 600; letter-spacing: -0.4px; }
+.modal-subtitle { color: var(--label-2); }
+.section-title { color: var(--label-2); font-size: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; }
+.section-hint, .brand-notes { color: var(--label-3) !important; }
+.field-col label { color: var(--label-2); font-weight: 500; }
+
+.text-input,
+.select-input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid transparent;
+  border-radius: 16px;
+  color: var(--label);
+}
+.text-input:focus,
+.select-input:focus { border-color: var(--blue); background: rgba(255, 255, 255, 0.12); }
+
+/* Buttons: filled blue primary, tinted secondary, white focus */
+.btn {
+  border-radius: 999px !important;
+  font-weight: 600;
+  transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease), background 0.2s;
+}
+.btn:focus,
+.btn:hover {
+  outline: none;
+  filter: none;
+  transform: scale(1.05);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.95), 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-accent { background: var(--green); color: #00210a; }
+.btn-secondary { background: rgba(255, 255, 255, 0.12); color: var(--label); }
+
+.probe-status,
+.cam-config-item,
+.verification-card { background: rgba(255, 255, 255, 0.06); border: 1px solid var(--hairline); border-radius: 18px; color: var(--label-2); }
+.verification-card { border-radius: 24px; }
+.verification-card.is-success { border-color: var(--green); box-shadow: none; }
+.verification-card.is-error { border-color: var(--red); box-shadow: none; }
+.vc-badge { border-radius: 999px; background: var(--blue); font-weight: 600; }
+.vc-badge.is-success { background: var(--green); }
+.vc-badge.is-error { background: var(--red); }
+.vc-snapshot-box { border-radius: 16px; border: none; }
+.vc-info { color: var(--label-2); }
+.vc-info-line strong { color: var(--label); }
+.cam-config-url { color: var(--label-3); }
+.modal-footer { border-top: 1px solid var(--hairline); }
+.status-badge-loading { color: var(--blue); }
+.status-badge-success { color: var(--green); }
+.status-badge-warning { color: var(--yellow); }
+.status-badge-error { color: var(--red); }
+
+/* Toast */
+.toast-banner {
+  background: var(--material);
+  backdrop-filter: blur(30px) saturate(180%);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-weight: 600;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* Keep tiles inside the viewport regardless of content size */
+.viewport-area { min-height: 0; }
+.grid-1 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
+.grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.grid-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
