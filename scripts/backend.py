@@ -71,25 +71,47 @@ STATE = {
 GO2RTC_PROC = None
 
 
-def get_local_ip_range():
-    """Detect local IP and calculate /24 subnet."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def get_local_ips():
+    """Detect private IPv4 addresses of this host without requiring internet access."""
+    ips = []
+
+    def add(ip):
+        if ip and ip not in ips and not ip.startswith(('127.', '169.254.', '0.')):
+            ips.append(ip)
+
+    for target in ('8.8.8.8', '10.255.255.255', '192.168.255.255', '172.16.255.255'):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((target, 80))
+            add(s.getsockname()[0])
+        except Exception:
+            pass
+        finally:
+            s.close()
     try:
-        s.connect(('8.8.8.8', 80))
-        local_ip = s.getsockname()[0]
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add(info[4][0])
     except Exception:
-        local_ip = '127.0.0.1'
-    finally:
-        s.close()
+        pass
+    try:
+        out = subprocess.run(['ip', '-4', '-o', 'addr'], capture_output=True, text=True, timeout=3).stdout
+        for m in re.finditer(r'inet (\d+\.\d+\.\d+\.\d+)', out):
+            add(m.group(1))
+    except Exception:
+        pass
+    return ips
 
-    parts = local_ip.split('.')
-    if len(parts) == 4 and local_ip != '127.0.0.1':
-        subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
-        return local_ip, subnet_prefix
-    return local_ip, '192.168.1.'
+
+def get_local_ip_range():
+    """Return (primary local IP, primary /24 prefix)."""
+    ips = get_local_ips()
+    if ips:
+        parts = ips[0].split('.')
+        return ips[0], f"{parts[0]}.{parts[1]}.{parts[2]}."
+    return '127.0.0.1', '192.168.1.'
 
 
-def check_port(ip, port, timeout=0.4):
+def check_port(ip, port, timeout=0.8):
     """Check if a specific port is open on target IP."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
@@ -221,13 +243,17 @@ def verify_rtsp_auth(ip, port, path, username, password, timeout=3.0):
 
 def run_subnet_discovery():
     """Scan local subnet for devices with open RTSP (554), ONVIF (80, 2020, 8000), or Dahua/Imou (37777) ports."""
-    with SCAN_LOCK:
-        if STATE['scanning']:
-            return
-        STATE['scanning'] = True
+    STATE['scanning'] = True
     STATE['discovered'] = []
-    local_ip, subnet_prefix = get_local_ip_range()
-    STATE['progress'] = f"Scanning subnet {subnet_prefix}1-254 on camera ports..."
+    local_ips = get_local_ips()
+    prefixes = []
+    for ip in local_ips:
+        p = '.'.join(ip.split('.')[:3]) + '.'
+        if p not in prefixes:
+            prefixes.append(p)
+    if not prefixes:
+        prefixes = ['192.168.1.']
+    STATE['progress'] = f"Scanning subnet(s) {', '.join(x + '0/24' for x in prefixes)} on camera ports..."
 
     found = []
 
@@ -289,8 +315,8 @@ def run_subnet_discovery():
             found.append(device)
 
     try:
-        hosts = [f"{subnet_prefix}{i}" for i in range(1, 255) if f"{subnet_prefix}{i}" != local_ip]
-        with ThreadPoolExecutor(max_workers=40) as pool:
+        hosts = [f"{x}{i}" for x in prefixes for i in range(1, 255) if f"{x}{i}" not in local_ips]
+        with ThreadPoolExecutor(max_workers=100) as pool:
             list(pool.map(probe_host, hosts))
         STATE['discovered'] = found
         STATE['progress'] = f"Found {len(found)} camera/NVR device(s) on local network."
@@ -518,6 +544,8 @@ class CCTVHandler(http.server.SimpleHTTPRequestHandler):
             if STATE['scanning']:
                 self._json(200, {'status': 'scan_running'})
                 return
+            STATE['scanning'] = True
+            STATE['progress'] = 'Starting scan...'
             threading.Thread(target=run_subnet_discovery, daemon=True).start()
             self._json(200, {'status': 'scan_started'})
             return
