@@ -28,9 +28,15 @@ if result.returncode != 0:
     print(result.stdout)
     print(result.stderr)
     raise SystemExit('SDK signing failed')
+else:
+    print(result.stdout)
+    print('Signed widget created successfully')
 
 signed = signed_dir / unsigned.name
+with zipfile.ZipFile(signed) as package:
+    if not {'author-signature.xml', 'signature1.xml'}.issubset(package.namelist()):
+        raise SystemExit('Package is missing its signing files.')
+
 target = dist / 'CCTVFrame.wgt'
 target.write_bytes(signed.read_bytes())
-print('Signed widget created successfully: ' + str(target))
-
+print('Signed widget created: ' + str(target))

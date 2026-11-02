@@ -1,0 +1,17 @@
+{
+  "name": "cctvframe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CCTV Viewer interface for Samsung The Frame TV.",
+  "scripts": {
+    "build": "python scripts/package.py",
+    "package": "python scripts/package.py",
+    "dev": "python scripts/preview.py",
+    "backend": "python scripts/backend.py",
+    "check": "node --check app/main.js && python scripts/check.py",
+    "tv:info": "python scripts/tv.py info",
+    "tv:install": "python scripts/tv.py install",
+    "tv:launch": "python scripts/tv.py launch"
+  },
+  "license": "MIT"
+}
