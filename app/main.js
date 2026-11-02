@@ -153,7 +153,10 @@
 
       var savedC = localStorage.getItem(STORAGE_KEYS.CAMERAS);
       if (savedC) {
-        state.cameras = JSON.parse(savedC);
+        var parsed = JSON.parse(savedC);
+        state.cameras = Array.isArray(parsed) ? parsed.filter(function (c) {
+          return c && typeof c === 'object' && c.ip && c.name;
+        }) : DEMO_CAMERAS.slice();
       } else {
         state.cameras = DEMO_CAMERAS.slice();
       }
