@@ -534,20 +534,33 @@
     if (items[next].scrollIntoView) items[next].scrollIntoView(false);
   }
 
+  var IME_DONE = 65376;
+
   function handleKey(code, ev) {
     if (state.isModalOpen) {
       var active = document.activeElement;
-      var isText = active && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
+      var isInput = active && active.tagName === 'INPUT';
+      var isSelect = active && active.tagName === 'SELECT';
       if (code === KEYS.BACK || code === KEYS.ESC) closeModal();
       else if (code === KEYS.DOWN) { if (ev) ev.preventDefault(); moveModalFocus(1); }
       else if (code === KEYS.UP) { if (ev) ev.preventDefault(); moveModalFocus(-1); }
-      else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && !isText) {
+      else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && isSelect) {
+        // Change the option directly so the remote never needs the native popup
+        if (ev) ev.preventDefault();
+        var n = active.selectedIndex + (code === KEYS.RIGHT ? 1 : -1);
+        if (n >= 0 && n < active.options.length) {
+          active.selectedIndex = n;
+          active.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      } else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && !isInput) {
         if (ev) ev.preventDefault();
         moveModalFocus(code === KEYS.RIGHT ? 1 : -1);
-      } else if (code === KEYS.ENTER && active && active.tagName === 'INPUT') {
+      } else if (code === IME_DONE) {
+        // On-screen keyboard "Done": continue to the next field
         if (ev) ev.preventDefault();
         moveModalFocus(1);
       }
+      // ENTER on an input is left to the platform so the on-screen keyboard opens with a single press
       return;
     }
 
