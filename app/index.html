@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CCTV Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <main class="stage" id="stage" tabindex="0">
+    <!-- Top Header Bar -->
+    <header class="header">
+      <div class="header-left">
+        <span class="live-pulse"></span>
+        <h1 class="app-title">CCTV Live Viewer</h1>
+        <span class="mode-badge" id="modeBadge">4-Grid Live Wall</span>
+        <span class="gateway-badge" id="gatewayBadge">Connecting Gateway...</span>
+      </div>
+      <div class="header-right">
+        <button class="btn btn-primary" id="btnHeaderAddCam" style="padding: 8px 18px; font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; border-radius: 8px;">
+          ➕ Add Camera
+        </button>
+        <button class="btn btn-secondary" id="btnHeaderSettings" style="padding: 8px 14px; font-size: 15px; border-radius: 8px;">
+          ⚙️ Settings
+        </button>
+        <span class="clock" id="clock">--:--</span>
+        <div class="legend-bar">
+          <span class="key-pill pill-red" id="pillRed" title="Toggle Grid Layout (1/2/4/6)">Red: Grid</span>
+          <span class="key-pill pill-yellow" id="pillYellow" title="Refresh Snapshots">Yellow: Snap</span>
+          <span class="key-pill pill-blue" id="pillBlue" title="Open Settings & Wizard">Blue: Settings</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Views Area -->
+    <section class="viewport-area">
+      <!-- 1. Grid Live Wall (1x1, 2x2, 2x3) -->
+      <div class="grid-wall grid-4" id="gridWall">
+        <!-- Rendered dynamically by main.js -->
+      </div>
+
+      <!-- 2. Fullscreen Stream View -->
+      <div class="fullscreen-view" id="fullscreenView" hidden style="display:none;">
+        <div class="video-container" id="fsVideoContainer">
+          <video class="video-player" id="fsVideoPlayer" autoplay playsinline muted></video>
+          <div class="avplay-layer" id="fsAvplayLayer"></div>
+        </div>
+        <div class="fs-hud" id="fsHud">
+          <div class="fs-hud-left">
+            <span class="hud-status" id="fsHudStatus">LIVE</span>
+            <span class="hud-name" id="fsHudName">Front Entrance</span>
+            <span class="hud-codec" id="fsHudCodec">H.264 • WebRTC/MSE</span>
+          </div>
+          <div class="fs-hud-right">
+            <span class="hud-clock" id="fsHudClock">12:30:45</span>
+            <span class="hud-hint">Press Back to exit | &larr; &rarr; Next/Prev</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings & Add Camera Modal -->
+    <div class="modal-backdrop" id="settingsModal" hidden style="display:none;">
+      <div class="modal-window">
+        <div class="modal-header">
+          <h2>CCTV Viewer Settings &amp; Wizard</h2>
+          <span class="modal-subtitle">Configure go2rtc Gateway, Camera Presets &amp; Quality</span>
+        </div>
+
+        <div class="modal-body">
+          <!-- Backend Network Auto-Discovery & Diagnostics -->
+          <div class="config-section">
+            <label class="section-title">Backend Auto-Discovery &amp; Protocol Verification</label>
+            <div class="input-row">
+              <button class="btn btn-accent" id="btnRunDiscovery">🔍 Scan Local Network for Cameras</button>
+              <button class="btn btn-secondary" id="btnTestProbe">⚡ Test Camera Handshake</button>
+            </div>
+            <div class="probe-status" id="probeStatus">Ready to scan local subnet or probe camera RTSP/ONVIF ports.</div>
+            <div class="discovered-cameras" id="discoveredList" style="display:none;"></div>
+          </div>
+
+          <!-- Gateway Config -->
+          <div class="config-section">
+            <label class="section-title">Streaming Gateway (go2rtc / MediaMTX / Direct)</label>
+            <div class="input-row">
+              <input type="text" class="text-input" id="cfgGatewayUrl" placeholder="http://127.0.0.1:1984">
+              <button class="btn btn-primary" id="btnTestGateway">Test Gateway</button>
+            </div>
+            <p class="section-hint">Using go2rtc provides low-latency WebRTC/MSE playback and live JPEG snapshots.
+            </p>
+          </div>
+
+          <!-- Add Camera Preset Wizard -->
+          <div class="config-section">
+            <label class="section-title">Add Camera / NVR Channel Wizard</label>
+            <div class="wizard-grid">
+              <div class="field-col">
+                <label>Camera Brand Preset</label>
+                <select class="select-input" id="wzBrand">
+                  <option value="tapo">TP-Link Tapo (/stream2)</option>
+                  <option value="imou">Imou WiFi Bullet Camera (/cam/realmonitor...)</option>
+                  <option value="dahua">Dahua / CP Plus (/cam/realmonitor?channel=1&subtype=1)</option>
+                  <option value="hikvision">Hikvision / Hilook NVR (/Streaming/Channels/102)</option>
+                  <option value="reolink">Reolink (/h264Preview_01_sub)</option>
+                  <option value="custom">Custom RTSP / Gateway Stream</option>
+                </select>
+              </div>
+
+              <div class="field-col">
+                <label>Camera Friendly Name</label>
+                <input type="text" class="text-input" id="wzName" placeholder="e.g. Front Door / Driveway">
+              </div>
+
+              <div class="field-col">
+                <label>Camera / NVR IP Address</label>
+                <input type="text" class="text-input" id="wzIp" placeholder="192.168.1.100">
+              </div>
+
+              <div class="field-col">
+                <label>RTSP Port</label>
+                <input type="text" class="text-input" id="wzPort" value="554">
+              </div>
+
+              <div class="field-col">
+                <label>Username</label>
+                <input type="text" class="text-input" id="wzUser" placeholder="admin / camera_account">
+              </div>
+
+              <div class="field-col">
+                <label>Password / Safety Code</label>
+                <input type="password" class="text-input" id="wzPass" placeholder="Password or Safety Code">
+              </div>
+
+              <div class="field-col">
+                <label>Channel Number (NVRs)</label>
+                <input type="number" class="text-input" id="wzChannel" value="1" min="1" max="64">
+              </div>
+            </div>
+
+            <div class="brand-notes" style="margin-top: 10px; font-size: 13px; color: #a4b0be; line-height: 1.4;">
+              <p>💡 <strong>TP-Link Tapo:</strong> Create a dedicated <em>Camera Account</em> in the Tapo mobile app (Camera Settings &rarr; Advanced Settings &rarr; Camera Account). Do not use your TP-Link cloud account password.</p>
+              <p style="margin-top: 4px;">💡 <strong>Imou WiFi Bullet:</strong> Username is <code>admin</code>. Password is the <strong>Safety Code</strong> (8 uppercase alphanumeric characters) printed on the camera body sticker near the QR code.</p>
+            </div>
+
+            <div class="input-row" style="margin-top: 12px; gap: 12px;">
+              <input type="text" class="text-input" id="wzGeneratedUrl" placeholder="rtsp://admin:pass@ip:port/..."
+                readonly>
+              <button class="btn btn-primary" id="btnVerifyCamera" style="padding:10px 18px; font-size:15px; white-space:nowrap;">⚡ Verify Auth &amp; Live View</button>
+              <button class="btn btn-accent" id="btnAddCamera" style="padding:10px 18px; font-size:15px; white-space:nowrap;">➕ Add to Watchlist</button>
+            </div>
+
+            <!-- Visual & Authentication Verification Box -->
+            <div class="verification-card" id="verificationCard" style="display: none;">
+              <div class="vc-header">
+                <span class="vc-badge" id="vcAuthBadge">AUTHENTICATING...</span>
+                <span class="vc-title" id="vcTitle">Camera Verification Status</span>
+              </div>
+              <div class="vc-body">
+                <div class="vc-snapshot-box" id="vcSnapBox">
+                  <img id="vcSnapImg" alt="Visual Camera Snapshot" style="display: none;">
+                  <div class="vc-snap-overlay" id="vcSnapOverlay">
+                    <span id="vcSnapText">Awaiting Verification...</span>
+                  </div>
+                </div>
+                <div class="vc-info">
+                  <div class="vc-info-line"><strong>Auth Status:</strong> <span id="vcLineAuth">Not tested yet</span></div>
+                  <div class="vc-info-line"><strong>Video Stream:</strong> <span id="vcLineCodec">--</span></div>
+                  <div class="vc-info-line"><strong>Audio Track:</strong> <span id="vcLineAudio">--</span></div>
+                  <div class="vc-info-line"><strong>Server/Info:</strong> <span id="vcLineDetails">--</span></div>
+                  <div class="vc-hint" id="vcHint" style="display: none;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Configured Cameras List -->
+          <div class="config-section">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <label class="section-title" style="margin:0;">Configured Cameras</label>
+              <button class="btn btn-secondary" id="btnClearAllCams" style="padding:4px 10px; font-size:13px; color:#ff6b81;">🗑️ Clear Demo Cameras</button>
+            </div>
+            <div class="cam-config-list" id="configuredCamList"></div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-primary" id="btnSaveClose">💾 Save &amp; Apply</button>
+          <button class="btn btn-secondary" id="btnCancelClose">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- On-screen Toast Notification -->
+    <div class="toast-banner is-hidden" id="toastBanner" style="display:none;"></div>
+  </main>
+
+  <script src="main.js"></script>
+</body>
+
+</html>

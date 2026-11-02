@@ -1,0 +1,36 @@
+# go2rtc Streaming Gateway Configuration
+# Place this file as go2rtc.yaml next to your go2rtc executable
+# Download go2rtc: https://github.com/AlexxIT/go2rtc/releases
+
+api:
+  listen: ":1984"
+
+# Configure your camera RTSP source streams here:
+streams:
+  # 1. TP-Link Tapo WiFi Camera
+  # Note: Requires creating a "Camera Account" in Tapo App
+  # (Camera Settings -> Advanced Settings -> Camera Account)
+  # /stream2 = Substream (360p/720p - Best for TV grid)
+  # /stream1 = Mainstream (1080p/2K - For fullscreen)
+  tapo_front_sub:
+    - rtsp://camera_user:CameraPass123@192.168.31.101:554/stream2
+  tapo_front_main:
+    - rtsp://camera_user:CameraPass123@192.168.31.101:554/stream1
+
+  # 2. Imou WiFi Bullet Camera (Dahua Protocol)
+  # Note: Username is "admin". Password is the "Safety Code"
+  # (8 uppercase characters printed on the camera body sticker near QR code)
+  # subtype=1 = Substream (Low-bitrate, optimal for grid decoding)
+  # subtype=0 = Mainstream (Full resolution)
+  imou_bullet_sub:
+    - rtsp://admin:SAFETYCODE@192.168.31.102:554/cam/realmonitor?channel=1&subtype=1
+  imou_bullet_main:
+    - rtsp://admin:SAFETYCODE@192.168.31.102:554/cam/realmonitor?channel=1&subtype=0
+
+  # 3. Dahua / CP Plus Camera or NVR Channel
+  dahua_garage:
+    - rtsp://admin:password123@192.168.31.103:554/cam/realmonitor?channel=1&subtype=1
+
+  # 4. Hikvision / Hilook Camera or NVR Substream (Channel 1 = 102)
+  hik_gate:
+    - rtsp://admin:password123@192.168.31.104:554/Streaming/Channels/102
