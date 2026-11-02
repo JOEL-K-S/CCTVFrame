@@ -153,7 +153,10 @@
 
       var savedC = localStorage.getItem(STORAGE_KEYS.CAMERAS);
       if (savedC) {
-        state.cameras = JSON.parse(savedC);
+        var parsed = JSON.parse(savedC);
+        state.cameras = Array.isArray(parsed) ? parsed.filter(function (c) {
+          return c && typeof c === 'object' && c.ip && c.name;
+        }) : DEMO_CAMERAS.slice();
       } else {
         state.cameras = DEMO_CAMERAS.slice();
       }
@@ -560,7 +563,26 @@
         if (ev) ev.preventDefault();
         moveModalFocus(1);
       }
-      // ENTER on an input is left to the platform so the on-screen keyboard opens with a single press
+      else if (code === KEYS.ENTER && isInput) {
+        // Re-trigger focus/click so the TV opens its on-screen keyboard on a single Enter
+        active.blur();
+        active.focus();
+        active.click();
+      }
+      return;
+    }
+
+    var headBtns = [$('btnHeaderAddCam'), $('btnHeaderSettings')];
+    var headIdx = headBtns.indexOf(document.activeElement);
+    if (!state.isFullscreen && headIdx >= 0) {
+      if (ev) ev.preventDefault();
+      if (code === KEYS.LEFT) headBtns[Math.max(0, headIdx - 1)].focus();
+      else if (code === KEYS.RIGHT) headBtns[Math.min(headBtns.length - 1, headIdx + 1)].focus();
+      else if (code === KEYS.DOWN || code === KEYS.BACK || code === KEYS.ESC) {
+        headBtns[headIdx].blur();
+        var stage = $('stage');
+        if (stage) stage.focus();
+      } else if (code === KEYS.ENTER) headBtns[headIdx].click();
       return;
     }
 
@@ -593,6 +615,7 @@
       if (state.focusedIndex % cols < cols - 1 && state.focusedIndex + 1 < slots) setFocus(state.focusedIndex + 1);
     } else if (code === KEYS.UP) {
       if (state.focusedIndex >= cols) setFocus(state.focusedIndex - cols);
+      else if (headBtns[0]) headBtns[0].focus();
     } else if (code === KEYS.DOWN) {
       if (state.focusedIndex + cols < slots) setFocus(state.focusedIndex + cols);
     } else if (code === KEYS.ENTER) {
