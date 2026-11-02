@@ -1,0 +1,6 @@
+# Local secrets, runtime data and build output
+/data/
+/bin/
+/dist/
+__pycache__/
+*.pyc

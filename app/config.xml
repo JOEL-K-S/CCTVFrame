@@ -12,6 +12,7 @@
   <tizen:privilege name="http://tizen.org/privilege/internet"/>
   <tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
   <tizen:privilege name="http://developer.samsung.com/privilege/network.public"/>
+  <access origin="*" subdomains="true"/>
   <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
 </widget>
 
