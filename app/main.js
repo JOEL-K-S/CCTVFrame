@@ -560,7 +560,12 @@
         if (ev) ev.preventDefault();
         moveModalFocus(1);
       }
-      // ENTER on an input is left to the platform so the on-screen keyboard opens with a single press
+      else if (code === KEYS.ENTER && isInput) {
+        // Re-trigger focus/click so the TV opens its on-screen keyboard on a single Enter
+        active.blur();
+        active.focus();
+        active.click();
+      }
       return;
     }
 
