@@ -153,7 +153,10 @@
 
       var savedC = localStorage.getItem(STORAGE_KEYS.CAMERAS);
       if (savedC) {
-        state.cameras = JSON.parse(savedC);
+        var parsed = JSON.parse(savedC);
+        state.cameras = Array.isArray(parsed) ? parsed.filter(function (c) {
+          return c && typeof c === 'object' && c.ip && c.name;
+        }) : DEMO_CAMERAS.slice();
       } else {
         state.cameras = DEMO_CAMERAS.slice();
       }
@@ -534,20 +537,52 @@
     if (items[next].scrollIntoView) items[next].scrollIntoView(false);
   }
 
+  var IME_DONE = 65376;
+
   function handleKey(code, ev) {
     if (state.isModalOpen) {
       var active = document.activeElement;
-      var isText = active && (active.tagName === 'INPUT' || active.tagName === 'SELECT');
+      var isInput = active && active.tagName === 'INPUT';
+      var isSelect = active && active.tagName === 'SELECT';
       if (code === KEYS.BACK || code === KEYS.ESC) closeModal();
       else if (code === KEYS.DOWN) { if (ev) ev.preventDefault(); moveModalFocus(1); }
       else if (code === KEYS.UP) { if (ev) ev.preventDefault(); moveModalFocus(-1); }
-      else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && !isText) {
+      else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && isSelect) {
+        // Change the option directly so the remote never needs the native popup
+        if (ev) ev.preventDefault();
+        var n = active.selectedIndex + (code === KEYS.RIGHT ? 1 : -1);
+        if (n >= 0 && n < active.options.length) {
+          active.selectedIndex = n;
+          active.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      } else if ((code === KEYS.LEFT || code === KEYS.RIGHT) && !isInput) {
         if (ev) ev.preventDefault();
         moveModalFocus(code === KEYS.RIGHT ? 1 : -1);
-      } else if (code === KEYS.ENTER && active && active.tagName === 'INPUT') {
+      } else if (code === IME_DONE) {
+        // On-screen keyboard "Done": continue to the next field
         if (ev) ev.preventDefault();
         moveModalFocus(1);
       }
+      else if (code === KEYS.ENTER && isInput) {
+        // Re-trigger focus/click so the TV opens its on-screen keyboard on a single Enter
+        active.blur();
+        active.focus();
+        active.click();
+      }
+      return;
+    }
+
+    var headBtns = [$('btnHeaderAddCam'), $('btnHeaderSettings')];
+    var headIdx = headBtns.indexOf(document.activeElement);
+    if (!state.isFullscreen && headIdx >= 0) {
+      if (ev) ev.preventDefault();
+      if (code === KEYS.LEFT) headBtns[Math.max(0, headIdx - 1)].focus();
+      else if (code === KEYS.RIGHT) headBtns[Math.min(headBtns.length - 1, headIdx + 1)].focus();
+      else if (code === KEYS.DOWN || code === KEYS.BACK || code === KEYS.ESC) {
+        headBtns[headIdx].blur();
+        var stage = $('stage');
+        if (stage) stage.focus();
+      } else if (code === KEYS.ENTER) headBtns[headIdx].click();
       return;
     }
 
@@ -580,6 +615,7 @@
       if (state.focusedIndex % cols < cols - 1 && state.focusedIndex + 1 < slots) setFocus(state.focusedIndex + 1);
     } else if (code === KEYS.UP) {
       if (state.focusedIndex >= cols) setFocus(state.focusedIndex - cols);
+      else if (headBtns[0]) headBtns[0].focus();
     } else if (code === KEYS.DOWN) {
       if (state.focusedIndex + cols < slots) setFocus(state.focusedIndex + cols);
     } else if (code === KEYS.ENTER) {
