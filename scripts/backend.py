@@ -99,7 +99,9 @@ def get_local_ips():
             add(m.group(1))
     except Exception:
         pass
-    return ips
+    # Skip Docker's default bridge unless it is the only network found
+    real = [i for i in ips if not i.startswith('172.17.')]
+    return real or ips
 
 
 def get_local_ip_range():
